@@ -7,7 +7,6 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.svm import SVC
 from sklearn.preprocessing import StandardScaler
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 
 # ==========================================
 # PAGE CONFIGURATION & STYLING
@@ -52,19 +51,78 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
+# 0. MULTI-CATEGORY MACHINERY DATABASE
+# ==========================================
+EQUIPMENT_DATABASE = {
+    "Heavy Duty Machinery (Excavators)": {
+        "Heavy Duty Excavators": [
+            "CAT 336D — Main Hydraulic Pump & Drive",
+            "Komatsu PC400 — Swing Motor & Planetary Gearbox",
+            "Hitachi EX1200 — Final Drive & Track Roller Bearing",
+            "Volvo EC480D — Diesel Engine & Turbocharger Assembly"
+        ]
+    },
+    "Cranes & Lifts": {
+        "Mobile Cranes": [
+            "Liebherr LTM 1100 — Telescopic Boom Hoist Winch & Brake",
+            "Grove GMK5250L — Slewing Ring Bearing & Pinion Drive",
+            "Tadano ATF 220G — Outrigger & Main Hydraulic Cylinder"
+        ],
+        "Tower Cranes": [
+            "Potain MDT 219 — Hoist Gearbox & Drum Bearing",
+            "Liebherr 280 EC-H — Trolley Travel Motor & Slewing Drive",
+            "Terex CTL 272 — High-Torque Winch & Reduction Gear"
+        ],
+        "Industrial Lifts": [
+            "Konecranes 50T Overhead — Bridge Hoist Motor & Rope Drum",
+            "JLG Heavy Scissor Lift — Hydraulic Lift Pump & Actuator",
+            "Hyster Forklift H360 — Mast Lift Cylinder & Drive Axle"
+        ]
+    },
+    "Hydraulic Machines": {
+        "Hydraulic Presses": [
+            "Schuler 2500T Forging Press — Main Ram Cylinder & Seals",
+            "Beckwood Stamping Press — High-Pressure Proportional Valve",
+            "industrial Deep-Draw Press — Variable Displacement Piston Pump"
+        ],
+        "Industrial Pumps": [
+            "Bosch Rexroth Axial Piston Pump — Swashplate & Port Plate",
+            "Parker Denison Vane Pump — Rotor Cartridge & Shaft Bearing",
+            "Sulzer High-Pressure Centrifugal — Impeller & Mechanical Seal"
+        ]
+    },
+    "Motors & Generators": {
+        "Heavy Duty Motors": [
+            "ABB 500kW Induction Motor — Drive-End (DE) Roller Bearing",
+            "Siemens Simotics HV Motor — Stator Winding & Rotor Shaft",
+            "WEG W22 Industrial Crusher Motor — Non-Drive-End (NDE) Bearing"
+        ],
+        "Air Compressors": [
+            "Atlas Copco GA90 Rotary Screw — Male/Female Airend Rotors",
+            "Ingersoll Rand Two-Stage Compressor — High-Speed Thrust Bearing",
+            "Kaeser CSD 125 — Cooling Oil Separator & Drive Coupling"
+        ],
+        "Power Generators": [
+            "Cummins C1000D5 (1000 kVA) — Alternator Rotor & Exciter Bearing",
+            "Caterpillar C32 Diesel Genset — Crankshaft Damper & Turbo",
+            "MTU Onsite Energy 16V — Main Alternator Coupling & Cooling Fan"
+        ]
+    }
+}
+
+# ==========================================
 # 1. BASELINE ML ENGINE TRAINING (Cached)
 # ==========================================
 @st.cache_resource
 def initialize_ai_models():
     """
-    Trains the Random Forest and SVM models based on the historical synthetic 
-    excavator dataset architecture (vibration, temperature, working_hours, 
+    Trains the Random Forest and SVM models based on multi-machinery synthetic
+    condition monitoring data (vibration, temperature, working_hours,
     noise_level, fluid_pressure, dominant_freq).
     """
     np.random.seed(42)
-    n = 1500
-    
-    # Extending the baseline parameters from the reference prototype
+    n = 1800
+
     df = pd.DataFrame({
         "vibration_rms": np.random.uniform(1.0, 12.0, n),
         "vibration_p2p": np.random.uniform(3.0, 35.0, n),
@@ -74,7 +132,7 @@ def initialize_ai_models():
         "acoustic_db": np.random.uniform(40.0, 115.0, n),
         "working_hours": np.random.uniform(1.0, 16.0, n)
     })
-    
+
     # Multi-class target assignment based on domain diagnostic rules:
     # 0: Normal Operation
     # 1: Bearing Wear / Gear Meshing Fault (High Freq + High Acoustic)
@@ -88,25 +146,25 @@ def initialize_ai_models():
     ]
     choices = [1, 2, 3, 1]
     df["fault_class"] = np.select(conditions, choices, default=0)
-    
+
     features = [
-        "vibration_rms", "vibration_p2p", "dominant_freq", 
+        "vibration_rms", "vibration_p2p", "dominant_freq",
         "temperature", "fluid_pressure", "acoustic_db", "working_hours"
     ]
     X = df[features]
     y = df["fault_class"]
-    
+
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
-    
+
     # Random Forest Model (Ensemble Tree Diagnostics)
     rf_model = RandomForestClassifier(n_estimators=120, max_depth=10, random_state=42)
     rf_model.fit(X_scaled, y)
-    
+
     # Support Vector Machine (Hyperplane Anomaly Boundary)
     svm_model = SVC(kernel="rbf", probability=True, C=1.5, random_state=42)
     svm_model.fit(X_scaled, y)
-    
+
     return rf_model, svm_model, scaler, features
 
 rf_model, svm_model, scaler, feature_cols = initialize_ai_models()
@@ -116,32 +174,32 @@ rf_model, svm_model, scaler, feature_cols = initialize_ai_models()
 # ==========================================
 def generate_and_filter_signals(p2p_amp, rms_val, dom_freq, acoustic_db, filter_method, cutoff_freq, noise_injection):
     """
-    Simulates a high-frequency accelerometer time-series waveform with mechanical 
+    Simulates a high-frequency accelerometer time-series waveform with mechanical
     harmonics and random background Gaussian noise, then applies digital denoising.
     """
     fs = 3000.0  # Sampling frequency (3000 Hz)
     duration = 0.5  # 0.5 seconds window
     t = np.linspace(0, duration, int(fs * duration), endpoint=False)
-    
+
     # Base primary harmonic + secondary gear/bearing sidebands
     primary_wave = (p2p_amp / 2.0) * np.sin(2 * np.pi * dom_freq * t)
-    second_harmonic = (rms_val * 0.35) * np.sin(2 * np.pi * (dom_freq * 2.0) * t + np.pi/4)
+    second_harmonic = (rms_val * 0.35) * np.sin(2 * np.pi * (dom_freq * 2.0) * t + np.pi / 4)
     sub_harmonic = (rms_val * 0.20) * np.sin(2 * np.pi * (dom_freq * 0.5) * t)
-    
+
     # High-frequency bearing micro-impacts scaled by Acoustic Emission (dB)
     impact_modulation = 0.0
     if acoustic_db > 80:
-        impact_Severity = (acoustic_db - 80) / 30.0
-        impact_modulation = impact_Severity * 3.5 * np.sin(2 * np.pi * 850 * t) * np.exp(-15 * (t % 0.05))
-        
+        impact_severity = (acoustic_db - 80) / 30.0
+        impact_modulation = impact_severity * 3.5 * np.sin(2 * np.pi * 850 * t) * np.exp(-15 * (t % 0.05))
+
     clean_signal = primary_wave + second_harmonic + sub_harmonic + impact_modulation
-    
+
     # Inject ambient machine & sensor noise
     np.random.seed(101)
     ambient_noise = np.random.normal(0, noise_injection, len(t))
     high_freq_interference = (noise_injection * 0.6) * np.sin(2 * np.pi * 1350 * t)
     raw_signal = clean_signal + ambient_noise + high_freq_interference
-    
+
     # Apply selected Preprocessing / Denoising Filter
     if filter_method == "Butterworth Low-Pass Filter":
         nyquist = 0.5 * fs
@@ -149,47 +207,44 @@ def generate_and_filter_signals(p2p_amp, rms_val, dom_freq, acoustic_db, filter_
         b, a = butter(N=4, Wn=normal_cutoff, btype='low', analog=False)
         filtered_signal = filtfilt(b, a, raw_signal)
     elif filter_method == "Wavelet Soft-Thresholding (Simulated)":
-        # Frequency-domain spectral gating + moving kernel smoothing
         fft_coeffs = rfft(raw_signal)
         freqs = rfftfreq(len(t), 1 / fs)
         threshold = np.std(raw_signal) * 1.8 * np.sqrt(2 * np.log(len(t)))
-        # Suppress noise floor while preserving dominant resonant spikes
         fft_filtered = np.where(
             (np.abs(fft_coeffs) > threshold) | (np.abs(freqs - dom_freq) < 30),
             fft_coeffs * (1 - 0.15 * (threshold / (np.abs(fft_coeffs) + 1e-6))),
             0.0
         )
         filtered_signal = np.fft.irfft(fft_filtered, n=len(t))
-    else:  # Savitzky-Golay / Moving Average Kernel
+    else:  # Moving Average Kernel
         kernel_size = 7
         kernel = np.ones(kernel_size) / kernel_size
         filtered_signal = fftconvolve(raw_signal, kernel, mode='same')
-        
+
     # Compute Fast Fourier Transform (FFT) Spectrum
     N = len(t)
     yf_raw = 2.0 / N * np.abs(rfft(raw_signal))
     yf_clean = 2.0 / N * np.abs(rfft(filtered_signal))
     xf = rfftfreq(N, 1 / fs)
-    
+
     # Compute Signal-to-Noise Ratio (SNR) improvement
     estimated_noise = raw_signal - filtered_signal
     snr_db = 10 * np.log10(np.var(filtered_signal) / (np.var(estimated_noise) + 1e-8))
     denoised_rms = np.sqrt(np.mean(filtered_signal**2))
-    
+
     return t, raw_signal, filtered_signal, xf, yf_raw, yf_clean, snr_db, denoised_rms
 
 # ==========================================
 # 3. HYBRID AI DIAGNOSTIC ENGINE
 # ==========================================
 def run_hybrid_diagnostics(
-    equipment_sub, p2p_amp, rms_val, dom_freq, temp, pressure, acoustic_db, working_hrs, denoised_rms
+    machine_type, equipment_sub, p2p_amp, rms_val, dom_freq, temp, pressure, acoustic_db, working_hrs, denoised_rms
 ):
     """
     Combines rule-based physics thresholds with 1D-CNN spectral feature extraction,
     Random Forest classification, and SVM boundary scoring to output fault diagnosis,
     Anomaly Score (0-100%), and Remaining Useful Life (RUL).
     """
-    # 1. Scale input vector for ML models
     input_df = pd.DataFrame([{
         "vibration_rms": rms_val,
         "vibration_p2p": p2p_amp,
@@ -200,12 +255,11 @@ def run_hybrid_diagnostics(
         "working_hours": working_hrs
     }])
     X_in = scaler.transform(input_df[feature_cols])
-    
+
     rf_probs = rf_model.predict_proba(X_in)[0]
     svm_probs = svm_model.predict_proba(X_in)[0]
-    
-    # 2. Simulate 1D-CNN Spectral Feature Map Confidence
-    # Evaluates energy concentration in high-frequency vs low-frequency bands
+
+    # Simulate 1D-CNN Spectral Feature Map Confidence
     cnn_probs = np.array([0.70, 0.10, 0.10, 0.10])
     if dom_freq >= 450 and acoustic_db >= 82:
         cnn_probs = np.array([0.05, 0.82, 0.08, 0.05])
@@ -213,84 +267,81 @@ def run_hybrid_diagnostics(
         cnn_probs = np.array([0.08, 0.07, 0.78, 0.07])
     elif temp > 88 and (pressure < 2300 or pressure > 4100):
         cnn_probs = np.array([0.05, 0.08, 0.07, 0.80])
-        
+
     # Ensemble probability fusion (40% CNN, 35% Random Forest, 25% SVM)
     ensemble_probs = (0.40 * cnn_probs) + (0.35 * rf_probs) + (0.25 * svm_probs)
     ensemble_probs = ensemble_probs / np.sum(ensemble_probs)
-    
-    # 3. Evaluate Explicit Physics & Domain Diagnostic Rules
+
+    # Evaluate Explicit Physics & Domain Diagnostic Rules
     fault_triggers = []
     recommendations = []
     severity = "Normal"
-    
+
     # Rule A: High-Frequency Vibration + High Acoustic Emission
     is_bearing_gear_fault = (dom_freq >= 400 and acoustic_db >= 82)
     # Rule B: Low-Frequency High Amplitude Vibration + Normal Temp
     is_structural_fault = (dom_freq < 220 and (p2p_amp >= 14.0 or rms_val >= 6.5) and temp <= 90)
-    # Rule C: High Temperature + Abnormal Fluid Pressure
+    # Rule C: High Temperature + Abnormal Fluid/System Pressure
     is_lubrication_fault = (temp > 90 and (pressure < 2200 or pressure > 4200))
-    
+
     if is_bearing_gear_fault:
         fault_triggers.append("Outer/Inner Race Bearing Wear or Gear Meshing Fault")
         recommendations.append(
-            f"Schedule immediate bearing raceway inspection & planetary gear backlash check on **{equipment_sub}**. "
+            f"Schedule immediate bearing raceway inspection & gear/rotor clearance check on <strong>{machine_type} ({equipment_sub})</strong>. "
             "Perform ultrasonic grease replenishment and inspect magnetic drain plugs for metallic debris."
         )
         ensemble_probs[1] = max(ensemble_probs[1], 0.78)
-        
+
     if is_structural_fault:
         fault_triggers.append("Structural Looseness, Misalignment, or Unbalance")
         recommendations.append(
-            f"Check engine/hydraulic pump mounts, drive coupling alignment, and structural frame bolts on **{equipment_sub}**. "
+            f"Check mounting bolts, drive coupling alignment, and structural base frame on <strong>{machine_type} ({equipment_sub})</strong>. "
             "Re-torque foundation fasteners and perform dynamic shaft balancing."
         )
         ensemble_probs[2] = max(ensemble_probs[2], 0.76)
-        
+
     if is_lubrication_fault:
         fault_triggers.append("Lubrication Failure or Imminent Component Damage")
         recommendations.append(
-            f"HALT HIGH-LOAD OPERATION: Inspect hydraulic/lubrication oil viscosity, relief valves, and clogged filters on **{equipment_sub}**. "
-            "Check heat exchanger cooling efficiency and oil pump pressure regulator immediately."
+            f"HALT HIGH-LOAD OPERATION: Inspect lubrication/hydraulic oil viscosity, relief valves, and clogged filters on <strong>{machine_type} ({equipment_sub})</strong>. "
+            "Check heat exchanger cooling efficiency and pressure regulator immediately."
         )
         ensemble_probs[3] = max(ensemble_probs[3], 0.84)
-        
-    # Secondary Threshold Warnings (Aligned with baseline PDF thresholds: Vib > 7, Temp > 90, Noise > 85)
+
+    # Secondary Threshold Warnings
     if not fault_triggers:
         if rms_val > 7.0 or temp > 90 or acoustic_db > 85 or p2p_amp > 16.0 or (pressure < 2200 or pressure > 4200):
             fault_triggers.append("Early-Stage Parametric Drift / Elevated Stress")
             recommendations.append(
-                f"Increase condition monitoring frequency for **{equipment_sub}**. "
-                "Verify fluid levels, inspect cooling fins, and schedule preventive maintenance within the next 48 operating hours."
+                f"Increase condition monitoring frequency for <strong>{machine_type} ({equipment_sub})</strong>. "
+                "Verify fluid/lubrication levels, inspect cooling pathways, and schedule preventive maintenance within 48 operating hours."
             )
         else:
             fault_triggers.append("Optimal Mechanical & Hydraulic Operation")
             recommendations.append(
-                f"Continue standard preventive maintenance schedule for **{equipment_sub}**. "
-                "All vibration, thermal, acoustic, and hydraulic signatures are within ISO 10816 baseline limits."
+                f"Continue standard preventive maintenance schedule for <strong>{machine_type} ({equipment_sub})</strong>. "
+                "All vibration, thermal, acoustic, and pressure signatures are within ISO 10816 baseline limits."
             )
 
-    # Re-normalize probabilities after rule reinforcement
     ensemble_probs = ensemble_probs / np.sum(ensemble_probs)
-    
-    # 4. Calculate Exact Anomaly Score (0.0 to 100.0)
+
+    # Calculate Exact Anomaly Score (0.0 to 100.0)
     vib_stress = min(100.0, max(0.0, ((rms_val - 2.0) / 8.0) * 100.0))
     p2p_stress = min(100.0, max(0.0, ((p2p_amp - 5.0) / 25.0) * 100.0))
     temp_stress = min(100.0, max(0.0, ((temp - 65.0) / 45.0) * 100.0))
     acoustic_stress = min(100.0, max(0.0, ((acoustic_db - 60.0) / 40.0) * 100.0))
-    
-    # Optimal excavator hydraulic pressure baseline: ~3000-3400 PSI
+
     pressure_dev = abs(pressure - 3200.0)
     pressure_stress = min(100.0, max(0.0, ((pressure_dev - 400.0) / 1600.0) * 100.0))
-    
+
     base_anomaly = (
-        0.25 * vib_stress + 
-        0.20 * p2p_stress + 
-        0.20 * temp_stress + 
-        0.20 * acoustic_stress + 
+        0.25 * vib_stress +
+        0.20 * p2p_stress +
+        0.20 * temp_stress +
+        0.20 * acoustic_stress +
         0.15 * pressure_stress
     )
-    
-    # Boost anomaly score if explicit compound fault combinations are active
+
     active_rule_count = sum([is_bearing_gear_fault, is_structural_fault, is_lubrication_fault])
     if active_rule_count >= 1:
         anomaly_score = min(99.4, max(68.0, base_anomaly * 1.35 + (active_rule_count * 12.0)))
@@ -298,23 +349,21 @@ def run_hybrid_diagnostics(
         anomaly_score = min(67.9, max(42.0, base_anomaly * 1.15))
     else:
         anomaly_score = min(39.0, max(4.2, base_anomaly * 0.75))
-        
-    # Determine Severity Status
+
     if anomaly_score >= 65.0 or active_rule_count >= 1:
         severity = "Critical"
     elif anomaly_score >= 38.0:
         severity = "Warning"
     else:
         severity = "Normal"
-        
-    # 5. Estimate Remaining Useful Life (RUL) via Exponential Weibull Degradation Model
-    # Base nominal overhaul life = 2,000 operating hours
+
+    # Estimate Remaining Useful Life (RUL)
     nominal_life_hrs = 2000.0
     duty_cycle_factor = 1.0 + ((working_hrs - 8.0) / 16.0) * 0.35
     degradation_rate = (anomaly_score / 100.0) ** 1.65
     rul_hours = max(4.0, nominal_life_hrs * (1.0 - degradation_rate) / max(0.7, duty_cycle_factor))
     rul_days = rul_hours / max(1.0, working_hrs)
-    
+
     return {
         "fault_diagnoses": fault_triggers,
         "recommendations": recommendations,
@@ -334,26 +383,27 @@ def run_hybrid_diagnostics(
 with st.sidebar:
     st.title("🚜 Equipment & Sensors")
     st.markdown("Configure machinery unit and real-time multi-sensor telemetry.")
-    
-    # 1. Equipment Selection Module
+
+    # 1. Equipment Selection Module (Updated with all categories & machines)
     st.subheader("1. Equipment Selection")
     equipment_category = st.selectbox(
-        "Machinery Class",
-        options=["Heavy Duty Excavators"],
+        "Machinery Category",
+        options=list(EQUIPMENT_DATABASE.keys()),
         index=0
     )
-    
-    excavator_subsystem = st.selectbox(
-        "Monitored Excavator Subsystem",
-        options=[
-            "CAT 336D — Main Hydraulic Pump & Drive",
-            "Komatsu PC400 — Swing Motor & Planetary Gearbox",
-            "Hitachi EX1200 — Final Drive & Track Roller Bearing",
-            "Volvo EC480D — Diesel Engine & Turbocharger Assembly"
-        ],
+
+    machine_type = st.selectbox(
+        "Select Machine Type",
+        options=list(EQUIPMENT_DATABASE[equipment_category].keys()),
         index=0
     )
-    
+
+    monitored_subsystem = st.selectbox(
+        "Monitored Machine Unit & Subsystem",
+        options=EQUIPMENT_DATABASE[equipment_category][machine_type],
+        index=0
+    )
+
     # Quick Diagnostic Preset Scenarios for Testing
     st.markdown("---")
     st.subheader("⚡ Quick Fault Presets")
@@ -368,8 +418,7 @@ with st.sidebar:
         ],
         index=0
     )
-    
-    # Set default slider values based on preset
+
     if preset_mode == "Normal Baseline Operation":
         def_p2p, def_rms, def_freq = 6.5, 2.8, 120.0
         def_temp, def_press, def_db, def_hrs = 68.0, 3200.0, 62.0, 8.0
@@ -389,40 +438,40 @@ with st.sidebar:
     st.markdown("---")
     st.subheader("2. Vibration Telemetry")
     p2p_amp = st.slider(
-        "Peak-to-Peak Amplitude (mm/s)", 
+        "Peak-to-Peak Amplitude (mm/s)",
         min_value=1.0, max_value=35.0, value=def_p2p, step=0.5,
         help="Maximum excursion of the time-domain vibration wave. Safe < 14 mm/s."
     )
     rms_val = st.slider(
-        "RMS Vibration Velocity (mm/s)", 
+        "RMS Vibration Velocity (mm/s)",
         min_value=1.0, max_value=12.0, value=def_rms, step=0.1,
         help="Root Mean Square vibration energy (ISO 10816). Threshold > 7.0 mm/s."
     )
     dom_freq = st.slider(
-        "Dominant Frequency (Hz)", 
+        "Dominant Frequency (Hz)",
         min_value=10.0, max_value=1200.0, value=def_freq, step=10.0,
         help="Primary spectral frequency spike. Low (<180 Hz) = unbalance/looseness; High (>400 Hz) = bearing/gear mesh."
     )
-    
+
     st.markdown("---")
     st.subheader("3. Multi-Sensor Telemetry")
     temp_val = st.slider(
-        "Component Temperature (°C)", 
+        "Component Temperature (°C)",
         min_value=40.0, max_value=130.0, value=def_temp, step=1.0,
-        help="Surface/oil temperature. Safe operating range: 50°C - 90°C."
+        help="Surface/oil/winding temperature. Safe operating range: 50°C - 90°C."
     )
     pressure_val = st.slider(
-        "Hydraulic / Fluid Pressure (PSI)", 
+        "Hydraulic / Lube Fluid Pressure (PSI)",
         min_value=1200.0, max_value=5000.0, value=def_press, step=50.0,
-        help="Nominal main hydraulic pressure: 2,200 - 4,200 PSI."
+        help="Nominal main hydraulic/lubrication pressure baseline: 2,200 - 4,200 PSI."
     )
     acoustic_val = st.slider(
-        "Acoustic Emission (dB)", 
+        "Acoustic Emission (dB)",
         min_value=40.0, max_value=115.0, value=def_db, step=1.0,
         help="High-frequency ultrasonic/acoustic decibel level. Threshold > 85 dB."
     )
     working_hrs = st.slider(
-        "Daily Shift Working Hours (hrs/day)", 
+        "Daily Shift Working Hours (hrs/day)",
         min_value=1.0, max_value=16.0, value=def_hrs, step=0.5,
         help="Active daily duty cycle used to weight RUL degradation."
     )
@@ -454,7 +503,7 @@ t, raw_sig, clean_sig, xf, yf_raw, yf_clean, snr_db, denoised_rms = generate_and
 )
 
 diag_results = run_hybrid_diagnostics(
-    excavator_subsystem, p2p_amp, rms_val, dom_freq, 
+    machine_type, monitored_subsystem, p2p_amp, rms_val, dom_freq,
     temp_val, pressure_val, acoustic_val, working_hrs, denoised_rms
 )
 
@@ -463,8 +512,8 @@ diag_results = run_hybrid_diagnostics(
 # ==========================================
 st.title("⚙️ Predictive Maintenance & AI Diagnostic Simulation")
 st.caption(
-    f"**Active Asset:** `{equipment_category}`  |  **Subsystem:** `{excavator_subsystem}`  |  "
-    f"**Preprocessing:** `{filter_type}`"
+    f"**Category:** `{equipment_category}`  |  **Machine Type:** `{machine_type}`  |  "
+    f"**Subsystem:** `{monitored_subsystem}`  |  **Filter:** `{filter_type}`"
 )
 
 # Top KPI Row
@@ -494,285 +543,3 @@ with kpi3:
 with kpi4:
     st.metric(
         label="Denoised RMS Velocity",
-        value=f"{rms_val:.1f} mm/s",
-        delta="Safe (<7.0)" if rms_val <= 7.0 else "High (>7.0)",
-        delta_color="normal" if rms_val <= 7.0 else "inverse"
-    )
-with kpi5:
-    st.metric(
-        label="Filter SNR Gain",
-        value=f"+{max(0.5, snr_db):.1f} dB",
-        delta=f"Noise σ={noise_level_sim}"
-    )
-
-st.markdown("---")
-
-# Severity Banner & Actionable Maintenance Recommendations
-sev = diag_results["severity"]
-css_class = "status-normal" if sev == "Normal" else ("status-warning" if sev == "Warning" else "status-critical")
-icon = "✅" if sev == "Normal" else ("⚠️" if sev == "Warning" else "🚨")
-
-fault_titles = " & ".join(diag_results["fault_diagnoses"])
-st.markdown(f"""
-<div class="{css_class}">
-    <h3 style="margin-top:0; margin-bottom:8px;">{icon} [{sev.upper()} ALERT] Primary Diagnosis: {fault_titles}</h3>
-    <p style="margin-bottom:4px; color:#e0e0e0;"><strong>🔧 Maintenance Recommendation:</strong> {diag_results['recommendations'][0]}</p>
-</div>
-""", unsafe_allow_html=True)
-
-if len(diag_results["recommendations"]) > 1:
-    for extra_rec in diag_results["recommendations"][1:]:
-        st.warning(f"**Additional Corrective Action:** {extra_rec}")
-
-st.write("")
-
-# ==========================================
-# TIME DOMAIN & FREQUENCY DOMAIN CHARTS
-# ==========================================
-st.subheader("📊 Real-Time Signal Preprocessing & Spectral Analysis")
-
-sig_col1, sig_col2 = st.columns(2)
-
-with sig_col1:
-    fig_time = go.Figure()
-    # Raw noisy signal
-    fig_time.add_trace(go.Scatter(
-        x=t[:350] * 1000, y=raw_sig[:350],
-        mode='lines', name='Raw Unfiltered Sensor Signal',
-        line=dict(color='rgba(160, 170, 190, 0.45)', width=1.2)
-    ))
-    # Filtered denoised signal
-    fig_time.add_trace(go.Scatter(
-        x=t[:350] * 1000, y=clean_sig[:350],
-        mode='lines', name=f'Denoised Signal ({filter_type.split()[0]})',
-        line=dict(color='#00d4ff', width=2.4)
-    ))
-    # Safe baseline amplitude threshold lines (+/- 7.0 mm/s peak equivalent to 14 mm/s P2P)
-    fig_time.add_hline(
-        y=7.0, line_dash="dash", line_color="#ff4b4b",
-        annotation_text="Upper Safe Limit (+7 mm/s)", annotation_position="top right"
-    )
-    fig_time.add_hline(
-        y=-7.0, line_dash="dash", line_color="#ff4b4b",
-        annotation_text="Lower Safe Limit (-7 mm/s)", annotation_position="bottom right"
-    )
-    fig_time.update_layout(
-        title="Time-Domain Vibration Waveform (0 - 115 ms Window)",
-        xaxis_title="Time (milliseconds)",
-        yaxis_title="Amplitude (mm/s)",
-        template="plotly_dark",
-        height=390,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        margin=dict(l=20, r=20, t=60, b=20)
-    )
-    st.plotly_chart(fig_time, use_container_width=True)
-
-with sig_col2:
-    fig_fft = go.Figure()
-    # Raw FFT Spectrum
-    fig_fft.add_trace(go.Scatter(
-        x=xf, y=yf_raw,
-        mode='lines', name='Raw Noisy Spectrum',
-        line=dict(color='rgba(255, 165, 0, 0.35)', width=1.2)
-    ))
-    # Filtered FFT Spectrum
-    fig_fft.add_trace(go.Scatter(
-        x=xf, y=yf_clean,
-        mode='lines', name='Denoised FFT Spectrum',
-        fill='tozeroy',
-        line=dict(color='#00ff9d', width=2.0)
-    ))
-    # Highlight diagnostic frequency zones
-    fig_fft.add_vrect(
-        x0=10, x1=180, fillcolor="yellow", opacity=0.07, line_width=0,
-        annotation_text="Low-Freq (Looseness/Unbalance)", annotation_position="top left"
-    )
-    fig_fft.add_vrect(
-        x0=400, x1=1250, fillcolor="red", opacity=0.08, line_width=0,
-        annotation_text="High-Freq (Bearing/Gear Mesh)", annotation_position="top right"
-    )
-    fig_fft.add_hline(
-        y=6.5, line_dash="dot", line_color="#ff4b4b",
-        annotation_text="Critical Spectral Magnitude", annotation_position="top left"
-    )
-    fig_fft.update_layout(
-        title="Frequency-Domain Spectrum (Fast Fourier Transform)",
-        xaxis_title="Frequency (Hz)",
-        yaxis_title="Spectral Magnitude (mm/s)",
-        xaxis=dict(range=[0, 1300]),
-        template="plotly_dark",
-        height=390,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        margin=dict(l=20, r=20, t=60, b=20)
-    )
-    st.plotly_chart(fig_fft, use_container_width=True)
-
-# ==========================================
-# MULTI-SENSOR BASELINE COMPARISON & AI ENSEMBLE
-# ==========================================
-st.markdown("---")
-bot_col1, bot_col2 = st.columns([1.15, 1.0])
-
-with bot_col1:
-    st.subheader("🛡️ Multi-Sensor Telemetry vs. Safe Baselines")
-    
-    # Normalize current values against safe upper thresholds (100% = Max Safe Limit)
-    sensor_metrics = pd.DataFrame({
-        "Parameter": [
-            "P2P Vibration (mm/s)",
-            "RMS Vibration (mm/s)",
-            "Component Temp (°C)",
-            "Fluid Pressure Dev (PSI)",
-            "Acoustic Emission (dB)"
-        ],
-        "Current Value": [p2p_amp, rms_val, temp_val, pressure_val, acoustic_val],
-        "Safe Limit": ["14.0 mm/s", "7.0 mm/s", "90.0 °C", "2200-4200 PSI", "85.0 dB"],
-        "NormalizedRatio": [
-            (p2p_amp / 14.0) * 100,
-            (rms_val / 7.0) * 100,
-            (temp_val / 90.0) * 100,
-            (abs(pressure_val - 3200.0) / 1000.0) * 100,
-            (acoustic_val / 85.0) * 100
-        ]
-    })
-    
-    bar_colors = [
-        "#dc3545" if val >= 100 else ("#ffc107" if val >= 80 else "#28a745")
-        for val in sensor_metrics["NormalizedRatio"]
-    ]
-    
-    fig_bars = go.Figure(go.Bar(
-        x=sensor_metrics["NormalizedRatio"],
-        y=sensor_metrics["Parameter"],
-        orientation='h',
-        marker_color=bar_colors,
-        text=[
-            f"{cur} (Limit: {lim}) — {pct:.0f}%"
-            for cur, lim, pct in zip(
-                sensor_metrics["Current Value"], 
-                sensor_metrics["Safe Limit"], 
-                sensor_metrics["NormalizedRatio"]
-            )
-        ],
-        textposition='auto'
-    ))
-    fig_bars.add_vline(
-        x=100.0, line_dash="dash", line_color="#ff4b4b", line_width=2,
-        annotation_text="100% Safe Threshold Limit", annotation_position="top right"
-    )
-    fig_bars.update_layout(
-        title="Sensor Stress Index (% of Safe Operating Limit)",
-        xaxis_title="% of Maximum Safe Threshold",
-        xaxis=dict(range=[0, max(145, max(sensor_metrics["NormalizedRatio"]) + 15)]),
-        template="plotly_dark",
-        height=360,
-        margin=dict(l=20, r=20, t=50, b=20)
-    )
-    st.plotly_chart(fig_bars, use_container_width=True)
-
-with bot_col2:
-    st.subheader("🧠 Hybrid AI Architecture (CNN + SVM + RF)")
-    
-    fault_classes = [
-        "Normal Operation",
-        "Bearing / Gear Fault",
-        "Looseness / Unbalance",
-        "Lubrication Failure"
-    ]
-    
-    fig_ai = go.Figure()
-    fig_ai.add_trace(go.Bar(
-        name='1D-CNN (Spectral Features)',
-        x=fault_classes, y=diag_results["cnn_probs"] * 100,
-        marker_color='#00d4ff'
-    ))
-    fig_ai.add_trace(go.Bar(
-        name='Random Forest (Tree Rules)',
-        x=fault_classes, y=diag_results["rf_probs"] * 100,
-        marker_color='#00ff9d'
-    ))
-    fig_ai.add_trace(go.Bar(
-        name='SVM (RBF Hyperplane)',
-        x=fault_classes, y=diag_results["svm_probs"] * 100,
-        marker_color='#b57cff'
-    ))
-    fig_ai.add_trace(go.Scatter(
-        name='Ensemble Consensus',
-        x=fault_classes, y=diag_results["ensemble_probs"] * 100,
-        mode='lines+markers',
-        line=dict(color='#ff4b4b', width=3),
-        marker=dict(size=9)
-    ))
-    fig_ai.update_layout(
-        title="Model Confidence Distribution Across Fault Signatures",
-        yaxis_title="Prediction Probability (%)",
-        barmode='group',
-        template="plotly_dark",
-        height=360,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        margin=dict(l=20, r=20, t=50, b=20)
-    )
-    st.plotly_chart(fig_ai, use_container_width=True)
-
-# ==========================================
-# RUL DEGRADATION CURVE & TELEMETRY SUMMARY
-# ==========================================
-with st.expander("📈 View Remaining Useful Life (RUL) Degradation Trajectory & Diagnostic Matrix", expanded=True):
-    rul_col1, rul_col2 = st.columns([1.3, 1.0])
-    
-    with rul_col1:
-        # Simulate degradation curve from t=0 to failure threshold
-        hours_axis = np.linspace(0, max(100, diag_results["rul_hours"] * 1.25), 100)
-        current_health = 100.0 - diag_results["anomaly_score"]
-        # Weibull-style health decay curve projecting from current health state
-        health_projection = current_health * np.exp(-((hours_axis / max(10.0, diag_results["rul_hours"])) ** 1.8) * 1.5)
-        
-        fig_rul = go.Figure()
-        fig_rul.add_trace(go.Scatter(
-            x=hours_axis, y=health_projection,
-            mode='lines', name='Projected Component Health Index',
-            fill='tozeroy',
-            line=dict(color='#ffc107' if sev != "Critical" else '#dc3545', width=3)
-        ))
-        fig_rul.add_hline(
-            y=20.0, line_dash="dash", line_color="#ff4b4b",
-            annotation_text="Critical Failure Threshold (20% Health)", annotation_position="top right"
-        )
-        fig_rul.add_vline(
-            x=diag_results["rul_hours"], line_dash="dot", line_color="#00d4ff",
-            annotation_text=f"Estimated RUL: {diag_results['rul_hours']} hrs", annotation_position="top left"
-        )
-        fig_rul.update_layout(
-            title="Prognostic Health Index & RUL Projection Curve",
-            xaxis_title="Future Operating Hours (hrs)",
-            yaxis_title="Component Health Index (%)",
-            yaxis=dict(range=[0, 105]),
-            template="plotly_dark",
-            height=300,
-            margin=dict(l=20, r=20, t=45, b=20)
-        )
-        st.plotly_chart(fig_rul, use_container_width=True)
-        
-    with rul_col2:
-        st.markdown("#### Diagnostic Decision Logic Reference")
-        rule_table = pd.DataFrame({
-            "Sensor Combination": [
-                "High-Freq (>400 Hz) + High Acoustic (>82 dB)",
-                "Low-Freq (<220 Hz) + High Amp + Normal Temp (≤90°C)",
-                "High Temp (>90°C) + Abnormal Pressure (<2.2k or >4.2k PSI)",
-                "Baseline Thresholds (Vib ≤7, Temp ≤90, Noise ≤85)"
-            ],
-            "Predicted Fault": [
-                "Outer/Inner Race Bearing Wear or Gear Meshing Fault",
-                "Structural Looseness, Misalignment, or Unbalance",
-                "Lubrication Failure or Imminent Component Damage",
-                "Normal Excavator Operation"
-            ],
-            "Status": [
-                "🔴 ACTIVE" if (dom_freq >= 400 and acoustic_val >= 82) else "🟢 Clear",
-                "🔴 ACTIVE" if (dom_freq < 220 and (p2p_amp >= 14 or rms_val >= 6.5) and temp_val <= 90) else "🟢 Clear",
-                "🔴 ACTIVE" if (temp_val > 90 and (pressure_val < 2200 or pressure_val > 4200)) else "🟢 Clear",
-                "🟢 ACTIVE" if sev == "Normal" else "⚪ Inactive"
-            ]
-        })
-        st.dataframe(rule_table, use_container_width=True, hide_index=True)
